@@ -1,0 +1,255 @@
+
+<style>
+  * { box-sizing: border-box; }
+  .wrap { padding: 1rem 0; font-family: var(--font-sans); color: var(--color-text-primary); }
+  canvas { display: block; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--color-background-secondary); cursor: default; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  canvas.hovering { cursor: grab; }
+  .info-panel { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin: 10px 0 4px; }
+  .info-card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 8px 12px; font-size: 12px; }
+  .info-card .lbl { color: var(--color-text-secondary); margin-bottom: 2px; }
+  .info-card .val { font-weight: 500; font-size: 11px; font-family: var(--font-mono, monospace); }
+  .formula { font-size: 12px; color: var(--color-text-secondary); margin: 8px 0 4px; font-family: var(--font-mono, monospace); line-height: 1.8; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--color-text-secondary); align-items: center; }
+  .leg-item { display: flex; align-items: center; gap: 5px; }
+  .line-seg { width: 20px; height: 3px; display: inline-block; border-radius: 2px; }
+  .hint { font-size: 12px; color: var(--color-text-secondary); margin: 4px 0 0; }
+</style>
+<div class="wrap">
+  <canvas id="cv" width="640" height="400"></canvas>
+  <p class="hint">💡 화살표 끝(Move Direction)을 드래그해서 방향을 바꿔보세요</p>
+
+  <div class="info-panel" style="margin-top:10px">
+    <div class="info-card"><div class="lbl">Move Direction</div><div class="val" id="val-move">—</div></div>
+    <div class="info-card"><div class="lbl">Projection (onto Normal)</div><div class="val" id="val-proj">—</div></div>
+    <div class="info-card"><div class="lbl">Sliding Vector</div><div class="val" id="val-slide">—</div></div>
+    <div class="info-card"><div class="lbl">Slide onto Cell Line</div><div class="val" id="val-slide-proj">—</div></div>
+  </div>
+
+  <div class="formula">
+    Projection &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= Normal × Dot(Normal, MoveDir)<br>
+    SlidingVector &nbsp;&nbsp;&nbsp;= MoveDir − Projection<br>
+    SlideOnCellLine = CellLineDir × Dot(CellLineDir, SlidingVector)
+  </div>
+
+  <div class="legend">
+    <div class="leg-item"><span class="line-seg" style="background:#D85A30"></span> Move Direction</div>
+    <div class="leg-item"><span class="line-seg" style="background:#1D9E75"></span> Projection (Normal)</div>
+    <div class="leg-item"><span class="line-seg" style="background:#EF9F27"></span> Sliding Vector</div>
+    <div class="leg-item"><span class="line-seg" style="background:#D4537E"></span> Slide onto Cell Line</div>
+    <div class="leg-item"><span class="line-seg" style="background:#7F77DD"></span> Cell Line Normal</div>
+    <div class="leg-item"><span class="line-seg" style="background:#888780;border-top:1px dashed #888"></span> Cell Line</div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = 640, H = 400;
+const OX = 310, OY = 220;
+
+const cellNormal = normalize([0.6, -0.8]);
+let moveTip = [90, -55];
+let isDragging = false;
+
+function getDark() { return window.matchMedia('(prefers-color-scheme: dark)').matches; }
+function normalize(v) { const l=Math.sqrt(v[0]*v[0]+v[1]*v[1]); return l<1e-9?[0,0]:[v[0]/l,v[1]/l]; }
+function dot2(a,b) { return a[0]*b[0]+a[1]*b[1]; }
+function scale(v,s) { return [v[0]*s, v[1]*s]; }
+function sub(a,b) { return [a[0]-b[0], a[1]-b[1]]; }
+function add(a,b) { return [a[0]+b[0], a[1]+b[1]]; }
+function len2(v) { return Math.sqrt(v[0]*v[0]+v[1]*v[1]); }
+function toScreen(wx,wy) { return [OX+wx, OY+wy]; }
+function toWorld(sx,sy) { return [sx-OX, sy-OY]; }
+function hitTest(sx,sy,wx,wy,r=14) { const [scx,scy]=toScreen(wx,wy); return (sx-scx)**2+(sy-scy)**2<=r*r; }
+function getCanvasPos(e) {
+  const rect=cv.getBoundingClientRect();
+  const scaleX=W/rect.width, scaleY=H/rect.height;
+  const cx=e.touches?e.touches[0].clientX:e.clientX;
+  const cy=e.touches?e.touches[0].clientY:e.clientY;
+  return [(cx-rect.left)*scaleX,(cy-rect.top)*scaleY];
+}
+
+function drawArrow(from, to, color, width=2, dash=[], hL=12, hW=5) {
+  const [fx,fy]=toScreen(...from), [tx,ty]=toScreen(...to);
+  const dx=tx-fx, dy=ty-fy, l=Math.sqrt(dx*dx+dy*dy);
+  if(l<2) return;
+  const ux=dx/l, uy=dy/l;
+  ctx.save();
+  ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=width;
+  if(dash.length) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(fx,fy); ctx.lineTo(tx,ty); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(tx,ty);
+  ctx.lineTo(tx-ux*hL-uy*hW, ty-uy*hL+ux*hW);
+  ctx.lineTo(tx-ux*hL+uy*hW, ty-uy*hL-ux*hW);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function drawDot(wx,wy,r,fill,stroke,sw=1.5) {
+  const [x,y]=toScreen(wx,wy);
+  ctx.save(); ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fillStyle=fill; ctx.fill(); ctx.strokeStyle=stroke; ctx.lineWidth=sw; ctx.stroke(); ctx.restore();
+}
+
+function drawLbl(text,wx,wy,ox,oy,color,size=11,weight=400) {
+  const [x,y]=toScreen(wx,wy);
+  ctx.save(); ctx.font=`${weight} ${size}px var(--font-sans,sans-serif)`; ctx.fillStyle=color;
+  ctx.fillText(text,x+ox,y+oy); ctx.restore();
+}
+
+function drawRightAngle(atWx,atWy, dirA, dirB, size=7) {
+  const a=scale(normalize(dirA),size), b=scale(normalize(dirB),size), c=add(a,b);
+  const [x0,y0]=toScreen(atWx,atWy);
+  ctx.save(); ctx.strokeStyle='rgba(136,135,128,0.5)'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(x0+a[0],y0+a[1]);
+  ctx.lineTo(x0+c[0],y0+c[1]);
+  ctx.lineTo(x0+b[0],y0+b[1]);
+  ctx.stroke(); ctx.restore();
+}
+
+function drawDrop(fromW, toW, color) {
+  const [fx,fy]=toScreen(...fromW), [tx,ty]=toScreen(...toW);
+  ctx.save(); ctx.strokeStyle=color; ctx.lineWidth=1; ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.moveTo(fx,fy); ctx.lineTo(tx,ty); ctx.stroke();
+  ctx.setLineDash([]); ctx.restore();
+}
+
+function draw() {
+  const dark = getDark();
+  const gridCol  = dark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)';
+  const axisCol  = dark?'rgba(255,255,255,0.12)':'rgba(0,0,0,0.1)';
+  const textMuted= dark?'rgba(255,255,255,0.25)':'rgba(0,0,0,0.25)';
+
+  ctx.clearRect(0,0,W,H);
+
+  // Grid
+  ctx.save(); ctx.strokeStyle=gridCol; ctx.lineWidth=0.5;
+  for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  ctx.restore();
+
+  // Axes
+  ctx.save(); ctx.strokeStyle=axisCol; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,OY); ctx.lineTo(W,OY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(OX,0); ctx.lineTo(OX,H); ctx.stroke();
+  ctx.font='11px var(--font-sans,sans-serif)'; ctx.fillStyle=textMuted;
+  ctx.fillText('X →',W-28,OY-6); ctx.fillText('Z ↓',OX+6,14);
+  ctx.fillText('(XZ 평면, Y-up은 화면 밖)',OX-70,H-8);
+  ctx.restore();
+
+  // ---- Compute ----
+  const moveDir = [...moveTip];
+  const cellLineDir = [-cellNormal[1], cellNormal[0]];
+  const projVec = scale(cellNormal, dot2(cellNormal, moveDir));
+  const slideVec = sub(moveDir, projVec);
+  const slideOnLine = scale(cellLineDir, dot2(cellLineDir, slideVec));
+
+  // ---- Cell Line ----
+  const cellLineLen = 170;
+  const clStart = scale(cellLineDir, -cellLineLen);
+  const clEnd   = scale(cellLineDir,  cellLineLen);
+  drawArrow(clStart, clEnd, dark?'rgba(136,135,128,0.5)':'rgba(100,100,96,0.45)', 1.5, [6,4], 8, 4);
+  drawLbl('Cell Line', clEnd[0], clEnd[1], 6, -6, dark?'#9c9a92':'#5F5E5A');
+
+  // ---- Cell Normal ----
+  const normalTip = scale(cellNormal, 75);
+  drawArrow([0,0], normalTip, '#7F77DD', 2);
+  drawLbl('Normal', normalTip[0], normalTip[1], 6, -6, '#534AB7', 11);
+  drawRightAngle(0,0, cellNormal, cellLineDir, 8);
+
+  // ---- Move Direction ----
+  drawArrow([0,0], moveDir, '#D85A30', 2.5);
+  drawDrop(moveDir, projVec, dark?'rgba(29,158,117,0.45)':'rgba(29,158,117,0.4)');
+
+  // ---- Projection ----
+  drawArrow([0,0], projVec, '#1D9E75', 2);
+  const midProj = scale(projVec, 0.52);
+  drawLbl('Projection', midProj[0], midProj[1],
+    cellNormal[0]>0?4:-76, -12, dark?'#5DCAA5':'#0F6E56', 11);
+
+  // ---- Sliding Vector ----
+  drawArrow(projVec, moveDir, '#EF9F27', 2.5);
+  const midSlide = add(projVec, scale(slideVec, 0.5));
+  drawLbl('Sliding', midSlide[0], midSlide[1],
+    slideVec[0]>0?6:-52, slideVec[1]>0?14:-6, dark?'#FAC775':'#854F0B', 11);
+
+  // ---- Slide onto Cell Line ----
+  drawDrop(moveDir, slideOnLine, dark?'rgba(212,83,126,0.5)':'rgba(153,53,86,0.4)');
+  const dropDir = sub(moveDir, slideOnLine);
+  if(len2(dropDir)>2) drawRightAngle(slideOnLine[0], slideOnLine[1], cellLineDir, dropDir, 7);
+  drawArrow([0,0], slideOnLine, '#D4537E', 2.5);
+  const midSL = scale(slideOnLine, 0.5);
+  drawLbl('Slide on Line', midSL[0], midSL[1],
+    cellLineDir[0]>0?4:-80, cellLineDir[1]>0?14:-6, dark?'#ED93B1':'#993556', 11);
+  drawDot(slideOnLine[0], slideOnLine[1], 6, '#D4537E', '#993556', 2);
+
+  // ---- Object circle ----
+  const bgP = dark?'rgba(44,44,42,0.95)':'rgba(255,255,255,0.95)';
+  ctx.save(); ctx.beginPath(); ctx.arc(OX,OY,22,0,Math.PI*2);
+  ctx.fillStyle=bgP; ctx.fill();
+  ctx.strokeStyle=dark?'#9c9a92':'#5F5E5A'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.restore();
+  drawLbl('Object', -16, 0, 0, 4, dark?'#9c9a92':'#5F5E5A', 11);
+
+  // MoveDir label
+  const midMove = scale(moveDir, 0.6);
+  drawLbl('MoveDir', midMove[0], midMove[1],
+    moveDir[0]>0?6:-60, moveDir[1]<0?-6:14, dark?'#F0997B':'#993C1D', 11);
+
+  // Drag ring
+  if(isDragging){
+    const [tx,ty]=toScreen(moveDir[0],moveDir[1]);
+    ctx.save(); ctx.beginPath(); ctx.arc(tx,ty,16,0,Math.PI*2);
+    ctx.strokeStyle='rgba(216,90,48,0.35)'; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+  }
+  drawDot(moveDir[0],moveDir[1], 7, '#D85A30','#993C1D', 2);
+
+  // ---- Info panel ----
+  const mvN = normalize(moveDir);
+  document.getElementById('val-move').textContent =
+    `(${mvN[0].toFixed(2)}, ${mvN[1].toFixed(2)})  |${len2(moveDir).toFixed(0)}|`;
+  document.getElementById('val-proj').textContent =
+    `(${projVec[0].toFixed(1)}, ${projVec[1].toFixed(1)})`;
+  document.getElementById('val-slide').textContent =
+    `(${slideVec[0].toFixed(1)}, ${slideVec[1].toFixed(1)})`;
+  document.getElementById('val-slide-proj').textContent =
+    `(${slideOnLine[0].toFixed(1)}, ${slideOnLine[1].toFixed(1)})`;
+}
+
+// ---- Events ----
+cv.addEventListener('mousedown', e=>{
+  const [sx,sy]=getCanvasPos(e);
+  if(hitTest(sx,sy,...moveTip)){ isDragging=true; cv.classList.add('dragging'); cv.classList.remove('hovering'); }
+});
+cv.addEventListener('mousemove', e=>{
+  const [sx,sy]=getCanvasPos(e);
+  if(isDragging){
+    const pad=20;
+    moveTip=[
+      Math.max(-(OX-pad),Math.min(W-OX-pad,sx-OX)),
+      Math.max(-(OY-pad),Math.min(H-OY-pad,sy-OY))
+    ];
+    draw();
+  } else { cv.classList.toggle('hovering', hitTest(sx,sy,...moveTip)); }
+});
+cv.addEventListener('mouseup', ()=>{ isDragging=false; cv.classList.remove('dragging'); });
+cv.addEventListener('mouseleave', ()=>{ isDragging=false; cv.classList.remove('dragging'); });
+cv.addEventListener('touchstart', e=>{ e.preventDefault();
+  const [sx,sy]=getCanvasPos(e);
+  if(hitTest(sx,sy,...moveTip,22)) isDragging=true;
+},{passive:false});
+cv.addEventListener('touchmove', e=>{ e.preventDefault();
+  if(!isDragging) return;
+  const [sx,sy]=getCanvasPos(e);
+  const pad=20;
+  moveTip=[Math.max(-(OX-pad),Math.min(W-OX-pad,sx-OX)),Math.max(-(OY-pad),Math.min(H-OY-pad,sy-OY))];
+  draw();
+},{passive:false});
+cv.addEventListener('touchend',()=>{ isDragging=false; });
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+draw();
+</script>
