@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nudge Waypoints — Draggable</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f1efe8;
+    --color-text-primary: #2c2c2a;
+    --color-text-secondary: #5f5e5a;
+    --color-text-danger: #a32d2d;
+    --color-border-tertiary: rgba(0,0,0,0.15);
+    --color-border-secondary: rgba(0,0,0,0.3);
+    --border-radius-md: 8px;
+    --border-radius-lg: 12px;
+    --font-sans: system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-background-primary: #1e1e1c;
+      --color-background-secondary: #2c2c2a;
+      --color-text-primary: #e8e6dc;
+      --color-text-secondary: #9c9a92;
+      --color-text-danger: #f09595;
+      --color-border-tertiary: rgba(255,255,255,0.15);
+      --color-border-secondary: rgba(255,255,255,0.3);
+    }
+  }
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-background-primary);
+    color: var(--color-text-primary);
+    padding: 1.5rem;
+    min-height: 100vh;
+  }
+  h2 {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 1rem;
+    color: var(--color-text-primary);
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    background: var(--color-background-secondary);
+    cursor: default;
+    touch-action: none;
+  }
+  canvas.dragging { cursor: grabbing; }
+  canvas.hovering { cursor: grab; }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    margin: 12px 0;
+    align-items: center;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    max-width: 640px;
+  }
+  .ctrl-group { display: flex; align-items: center; gap: 8px; }
+  .ctrl-group span:last-child { min-width: 36px; font-weight: 500; color: var(--color-text-primary); }
+  input[type=range] { width: 100px; accent-color: var(--color-text-secondary); }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .badge-left  { background: #B5D4F4; color: #0C447C; }
+  .badge-right { background: #F5C4B3; color: #712B13; }
+  .badge-none  {
+    background: var(--color-background-primary);
+    color: var(--color-text-secondary);
+    border: 0.5px solid var(--color-border-tertiary);
+  }
+  .info-panel {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin: 10px 0 4px;
+    max-width: 640px;
+  }
+  .info-card {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .info-card .lbl { color: var(--color-text-secondary); margin-bottom: 2px; }
+  .info-card .val { font-weight: 500; font-size: 13px; }
+  .legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    align-items: center;
+    max-width: 640px;
+  }
+  .leg-item { display: flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .line-seg { width: 20px; height: 2px; display: inline-block; }
+  .hint { font-size: 12px; color: var(--color-text-secondary); margin: 4px 0 0; max-width: 640px; }
+</style>
+</head>
+<body>
+<h2>Nudge Waypoints Along Path — CNavigation::Nudge_Waypoints_AlongPath</h2>
+
+<div class="controls">
+  <div class="ctrl-group">
+    <span>Nudge 거리</span>
+    <input type="range" min="5" max="60" value="18" id="nudge" step="1">
+    <span id="nudge-val">18</span>
+  </div>
+  <div class="ctrl-group">
+    <span>Straightness ε</span>
+    <input type="range" min="0" max="50" value="10" id="eps" step="1">
+    <span id="eps-val">0.010</span>
+  </div>
+</div>
+
+<canvas id="cv" width="640" height="340"></canvas>
+<p class="hint">💡 Cur 점을 드래그해서 위치를 바꿔보세요</p>
+
+<div class="info-panel">
+  <div class="info-card"><div class="lbl">fTurnSignY</div><div class="val" id="turn-sign">—</div></div>
+  <div class="info-card"><div class="lbl">Nudge 방향</div><div class="val" id="nudge-dir">—</div></div>
+  <div class="info-card"><div class="lbl">|fTurnSignY| vs ε</div><div class="val" id="eps-check">—</div></div>
+</div>
+
+<div class="legend">
+  <div class="leg-item"><span class="dot" style="background:#378ADD"></span> Prev</div>
+  <div class="leg-item"><span class="dot" style="background:#D85A30"></span> Cur (원래)</div>
+  <div class="leg-item"><span class="dot" style="background:#1D9E75"></span> Cur (nudge 후)</div>
+  <div class="leg-item"><span class="dot" style="background:#888780"></span> Next</div>
+  <div class="leg-item"><span class="line-seg" style="background:#7F77DD"></span> vPathDir</div>
+  <div class="leg-item"><span class="line-seg" style="background:#D4537E"></span> vSegDir</div>
+  <div class="leg-item"><span class="line-seg" style="background:#F0997B;border:1px dashed #D85A30"></span> nudge 벡터</div>
+</div>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = 640, H = 340;
+const CX = W / 2, CY = H / 2;
+
+const PREV = [-90, 0];
+const NEXT = [ 90, 0];
+let curWorld = [0, -70];
+let isDragging = false;
+
+function getDark() {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function normalize(v) {
+  const len = Math.sqrt(v[0]*v[0] + v[1]*v[1]);
+  return len < 1e-9 ? [0, 0] : [v[0]/len, v[1]/len];
+}
+
+function compute(cur, nudgeDist, epsStraight) {
+  const pathDir = normalize([NEXT[0]-PREV[0], NEXT[1]-PREV[1]]);
+  const segDir  = normalize([cur[0]-PREV[0],  cur[1]-PREV[1]]);
+  const fTurnSignY = pathDir[1]*segDir[0] - pathDir[0]*segDir[1];
+  const isStraight = Math.abs(fTurnSignY) < epsStraight;
+  const leftNorm  = [-pathDir[1],  pathDir[0]];
+  const rightNorm = [ pathDir[1], -pathDir[0]];
+  let nudgeDir = null;
+  if (!isStraight) nudgeDir = fTurnSignY < 0 ? leftNorm : rightNorm;
+  const nudged = nudgeDir
+    ? [cur[0] + nudgeDir[0]*nudgeDist, cur[1] + nudgeDir[1]*nudgeDist]
+    : [...cur];
+  return { pathDir, segDir, fTurnSignY, isStraight, nudgeDir, nudged };
+}
+
+function toScreen(p) { return [CX + p[0], CY + p[1]]; }
+function toWorld(sx, sy) { return [sx - CX, sy - CY]; }
+
+function hitTest(sx, sy, wp, r = 14) {
+  const [wx, wy] = toScreen(wp);
+  return (sx-wx)**2 + (sy-wy)**2 <= r*r;
+}
+
+function getCanvasPos(e) {
+  const rect = cv.getBoundingClientRect();
+  const scaleX = W / rect.width, scaleY = H / rect.height;
+  const cx = e.touches ? e.touches[0].clientX : e.clientX;
+  const cy = e.touches ? e.touches[0].clientY : e.clientY;
+  return [(cx - rect.left) * scaleX, (cy - rect.top) * scaleY];
+}
+
+function arrow(from, to, color, width=1.5, dash=[]) {
+  const [fx, fy] = toScreen(from);
+  const [tx, ty] = toScreen(to);
+  const dx = tx-fx, dy = ty-fy;
+  const len = Math.sqrt(dx*dx+dy*dy);
+  if (len < 2) return;
+  const ux = dx/len, uy = dy/len;
+  const hL = 10, hW = 5;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width;
+  if (dash.length) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(tx, ty); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(tx - ux*hL - uy*hW, ty - uy*hL + ux*hW);
+  ctx.lineTo(tx - ux*hL + uy*hW, ty - uy*hL - ux*hW);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function dot(p, r, fill, stroke, sw=1.5) {
+  const [x, y] = toScreen(p);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = stroke; ctx.lineWidth = sw; ctx.stroke();
+  ctx.restore();
+}
+
+function txt(text, p, ox, oy, color, size=12, weight=500) {
+  const [x, y] = toScreen(p);
+  ctx.save();
+  ctx.font = `${weight} ${size}px system-ui, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.fillText(text, x+ox, y+oy);
+  ctx.restore();
+}
+
+function coordLabel(p, ox, oy, color) {
+  const [x, y] = toScreen(p);
+  ctx.save();
+  ctx.font = `400 11px system-ui, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.7;
+  ctx.fillText(`(${Math.round(p[0])}, ${Math.round(p[1])})`, x+ox, y+oy);
+  ctx.restore();
+}
+
+function draw() {
+  const nudgeDist   = parseFloat(document.getElementById('nudge').value);
+  const epsRaw      = parseFloat(document.getElementById('eps').value);
+  const epsStraight = epsRaw / 1000;
+  document.getElementById('nudge-val').textContent = nudgeDist;
+  document.getElementById('eps-val').textContent = epsStraight.toFixed(3);
+
+  const d = compute(curWorld, nudgeDist, epsStraight);
+  const dark = getDark();
+  const gridCol  = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+  const axisCol  = dark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)';
+  const textMuted = dark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)';
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.save(); ctx.strokeStyle = gridCol; ctx.lineWidth = 0.5;
+  for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  ctx.restore();
+
+  // Axes
+  ctx.save(); ctx.strokeStyle = axisCol; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0,CY); ctx.lineTo(W,CY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(CX,0); ctx.lineTo(CX,H); ctx.stroke();
+  ctx.font = '11px system-ui, sans-serif'; ctx.fillStyle = textMuted;
+  ctx.fillText('X →', W-28, CY-6);
+  ctx.fillText('Z ↓', CX+6, 14);
+  ctx.fillText('(XZ 평면, Y-up은 화면 밖)', CX-70, H-8);
+  ctx.restore();
+
+  // Prev→Next dashed baseline
+  const [px0,py0] = toScreen(PREV);
+  const [nx0,ny0] = toScreen(NEXT);
+  ctx.save();
+  ctx.strokeStyle = dark ? 'rgba(127,119,221,0.25)' : 'rgba(127,119,221,0.2)';
+  ctx.lineWidth = 1; ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(px0,py0); ctx.lineTo(nx0,ny0); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Original path (dashed)
+  const [cx0,cz0] = toScreen(curWorld);
+  ctx.save();
+  ctx.strokeStyle = dark ? 'rgba(216,90,48,0.45)' : 'rgba(216,90,48,0.4)';
+  ctx.lineWidth = 1.5; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(px0,py0); ctx.lineTo(cx0,cz0); ctx.lineTo(nx0,ny0); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Nudged path
+  if (!d.isStraight) {
+    const [ncx, ncz] = toScreen(d.nudged);
+    ctx.save();
+    ctx.strokeStyle = dark ? '#5DCAA5' : '#1D9E75'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px0,py0); ctx.lineTo(ncx,ncz); ctx.lineTo(nx0,ny0); ctx.stroke();
+    ctx.restore();
+  }
+
+  // vPathDir
+  const pS = 75;
+  arrow([-pS*d.pathDir[0], -pS*d.pathDir[1]], [pS*d.pathDir[0], pS*d.pathDir[1]], '#7F77DD', 2);
+
+  // vSegDir
+  const sS = 75;
+  arrow(PREV, [PREV[0]+d.segDir[0]*sS, PREV[1]+d.segDir[1]*sS], '#D4537E', 1.8);
+
+  // Normal indicators (faint dashed)
+  const nS = 45;
+  arrow([0,0], [-d.pathDir[1]*nS,  d.pathDir[0]*nS], dark ? 'rgba(55,138,221,0.35)' : 'rgba(55,138,221,0.3)', 1.2, [3,4]);
+  arrow([0,0], [ d.pathDir[1]*nS, -d.pathDir[0]*nS], dark ? 'rgba(216,83,126,0.35)' : 'rgba(212,83,126,0.3)', 1.2, [3,4]);
+
+  // Nudge vector
+  if (d.nudgeDir) arrow(curWorld, d.nudged, '#E8593C', 2, [4,3]);
+
+  // Points
+  dot(PREV, 7, '#378ADD', '#0C447C');
+  dot(NEXT, 7, '#888780', '#5F5E5A');
+
+  // Cur drag ring
+  if (isDragging) {
+    const [scx, scz] = toScreen(curWorld);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(scx, scz, 14, 0, Math.PI*2);
+    ctx.strokeStyle = d.isStraight ? 'rgba(136,135,128,0.35)' : 'rgba(216,90,48,0.35)';
+    ctx.lineWidth = 1.5; ctx.setLineDash([3,3]);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+  }
+  dot(curWorld, 7, d.isStraight ? '#888780' : '#D85A30', d.isStraight ? '#5F5E5A' : '#993C1D', 2);
+  if (!d.isStraight) dot(d.nudged, 8, '#1D9E75', '#0F6E56', 2);
+
+  // Labels
+  txt('Prev', PREV, 8, -10, '#185FA5', 12);
+  txt('Next', NEXT, 8, -10, '#5F5E5A', 12);
+  txt('Cur',  curWorld, 10, -18, d.isStraight ? '#5F5E5A' : '#993C1D', 12);
+  coordLabel(curWorld, 10, -5, d.isStraight ? '#5F5E5A' : '#993C1D');
+  if (!d.isStraight) {
+    txt("Cur'", d.nudged, 10, 18, '#0F6E56', 12);
+    coordLabel(d.nudged, 10, 30, '#0F6E56');
+  }
+
+  // Info panel
+  const signEl = document.getElementById('turn-sign');
+  signEl.textContent = d.fTurnSignY.toFixed(4);
+  signEl.style.color = d.fTurnSignY < 0 ? '#185FA5' : d.fTurnSignY > 0 ? '#993556' : 'var(--color-text-primary)';
+
+  const nudgeBadge = document.getElementById('nudge-dir');
+  if (d.isStraight) {
+    nudgeBadge.innerHTML = '<span class="badge badge-none">없음 (직선)</span>';
+  } else if (d.fTurnSignY < 0) {
+    nudgeBadge.innerHTML = '<span class="badge badge-left">← Left Normal</span>';
+  } else {
+    nudgeBadge.innerHTML = '<span class="badge badge-right">→ Right Normal</span>';
+  }
+
+  const abs = Math.abs(d.fTurnSignY);
+  document.getElementById('eps-check').innerHTML = d.isStraight
+    ? `<span style="color:var(--color-text-danger)">${abs.toFixed(4)} &lt; ε → SKIP</span>`
+    : `<span style="color:#1D9E75">${abs.toFixed(4)} ≥ ε → NUDGE</span>`;
+}
+
+// Mouse events
+cv.addEventListener('mousedown', e => {
+  const [sx, sy] = getCanvasPos(e);
+  if (hitTest(sx, sy, curWorld)) {
+    isDragging = true;
+    cv.classList.add('dragging');
+    cv.classList.remove('hovering');
+  }
+});
+cv.addEventListener('mousemove', e => {
+  const [sx, sy] = getCanvasPos(e);
+  if (isDragging) {
+    const pad = 20;
+    curWorld = toWorld(sx, sy);
+    curWorld[0] = Math.max(-(CX-pad), Math.min(CX-pad, curWorld[0]));
+    curWorld[1] = Math.max(-(CY-pad), Math.min(CY-pad, curWorld[1]));
+    draw();
+  } else {
+    cv.classList.toggle('hovering', hitTest(sx, sy, curWorld));
+  }
+});
+cv.addEventListener('mouseup', () => { isDragging = false; cv.classList.remove('dragging'); });
+cv.addEventListener('mouseleave', () => { isDragging = false; cv.classList.remove('dragging'); });
+
+// Touch events
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const [sx, sy] = getCanvasPos(e);
+  if (hitTest(sx, sy, curWorld, 22)) isDragging = true;
+}, { passive: false });
+cv.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!isDragging) return;
+  const [sx, sy] = getCanvasPos(e);
+  const pad = 20;
+  curWorld = toWorld(sx, sy);
+  curWorld[0] = Math.max(-(CX-pad), Math.min(CX-pad, curWorld[0]));
+  curWorld[1] = Math.max(-(CY-pad), Math.min(CY-pad, curWorld[1]));
+  draw();
+}, { passive: false });
+cv.addEventListener('touchend', () => { isDragging = false; });
+
+['nudge','eps'].forEach(id => document.getElementById(id).addEventListener('input', draw));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+
+draw();
+</script>
+</body>
+</html>
